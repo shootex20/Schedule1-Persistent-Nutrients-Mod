@@ -12,7 +12,7 @@ using Newtonsoft.Json;
 using MelonLoader.Utils;
 using Il2CppScheduleOne.ItemFramework;
 
-[assembly: MelonInfo(typeof(PersistentNutrients.PersistentNutrients), "PersistentNutrients Mod", "1.0.0", "Shootex20")]
+[assembly: MelonInfo(typeof(PersistentNutrients.PersistentNutrients), "PersistentNutrients Mod", "1.0.1", "Shootex20")]
 namespace PersistentNutrients
 {
     public class PersistentNutrients : MelonMod
@@ -80,29 +80,34 @@ namespace PersistentNutrients
             [HarmonyPostfix]
             public static void Postfix(Pot __instance, string seedID, float normalizedSeedProgress)
             {
-                if (__instance == null || __instance.GUID == null)
+                if (__instance == null || __instance.GUID == null || !__instance.IsServer)
                     return;
 
                 Guid potGuid = new Guid(__instance.GUID.ToByteArray());
 
                 if (persistentFertilizers.TryGetValue(potGuid, out var fertData))
                 {
-                    MelonLogger.Msg($"[PersistentNutrients Mod] Found saved fertilizer data for pot {potGuid}, starting delayed restoration...");
+                    MelonLogger.Msg($"[PersistentNutrients Mod] Found saved fertilizer data for pot {potGuid}, scheduling restoration...");
                     MelonCoroutines.Start(WaitAndRestore(__instance, fertData, potGuid));
                 }
             }
 
             private static IEnumerator WaitAndRestore(Pot pot, SavedPotFertilizerData fertData, Guid potGuid)
             {
+                // Wait longer to ensure plant is fully initialized and synced
                 int attempts = 0;
-                while (attempts < 50 && (pot == null || pot.Plant == null))
+                while (attempts < 100 && (pot == null || pot.Plant == null))
                 {
                     yield return null;
                     attempts++;
                 }
 
+                // Add extra delay after plant exists to ensure network sync completes
                 if (pot != null && pot.Plant != null)
                 {
+                    for (int i = 0; i < 10; i++)
+                        yield return null;
+
                     RestoreFertilizers(pot, fertData);
                 }
                 else
@@ -186,22 +191,26 @@ namespace PersistentNutrients
             var savedFertilizers = new List<AdditiveData>();
             bool hasSpeedGrow = false;
 
+
             foreach (var additive in pot.AppliedAdditives)
             {
-                if (additive != null && additive.Name.ToLower().Contains("fertilizer"))
+                if (additive != null)
                 {
-                    savedFertilizers.Add(new AdditiveData
+                    if (additive.Name.ToLower().Contains("fertilizer"))
                     {
-                        Name = additive.Name,
-                        YieldChange = additive.YieldMultiplier,
-                        QualityChange = additive.QualityChange,
-                        InstantGrowth = additive.InstantGrowth
-                    });
-                }
+                        savedFertilizers.Add(new AdditiveData
+                        {
+                            Name = additive.Name,
+                            YieldChange = additive.YieldMultiplier,
+                            QualityChange = additive.QualityChange,
+                            InstantGrowth = additive.InstantGrowth
+                        });
+                    }
 
-                if (additive != null && additive.InstantGrowth > 0f)
-                {
-                    hasSpeedGrow = true;
+                    if (additive.InstantGrowth > 0f)
+                    {
+                        hasSpeedGrow = true;
+                    }
                 }
             }
 
@@ -227,16 +236,7 @@ namespace PersistentNutrients
             pot.Plant.YieldMultiplier = fertData.YieldLevel;
             pot.Plant.QualityLevel = fertData.QualityLevel;
 
-            if (fertData.HadSpeedGrow)
-            {
-                pot.Plant.SetNormalizedGrowthProgress(0.5f);
-            }
-            else
-            {
-                pot.Plant.SetNormalizedGrowthProgress(0f);
-            }
 
-            MelonLogger.Msg($"[PersistentNutrients Mod] Restored fertilizers to pot: Yield {fertData.YieldLevel:F2}, Quality {fertData.QualityLevel:F2}, SpeedGrow: {fertData.HadSpeedGrow}");
         }
 
         [HarmonyPatch(typeof(SaveManager), "Save", new Type[] { typeof(string) })]
